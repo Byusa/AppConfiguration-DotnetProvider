@@ -3,6 +3,7 @@
 //
 using Azure.Core;
 using Azure.Security.KeyVault.Secrets;
+using System;
 using System.Collections.Generic;
 
 namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
@@ -32,6 +33,24 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
         public AzureAppConfigurationKeyVaultOptions Register(SecretClient secretClient)
         {
             SecretClients.Add(secretClient);
+            return this;
+        }
+
+        /// <summary>
+        /// Registers a mock <see cref="SecretClient"/> instance to use to resolve all key vault references to null.
+        /// </summary>
+        public AzureAppConfigurationKeyVaultOptions ResolveKeyVaultReferencesToNull()
+        {
+            SecretClients.Add(new MockSecretClient());
+            return this;
+        }
+
+        /// <summary>
+        /// Registers a mock <see cref="SecretClient"/> instance to use to resolve specific key vault references to null.
+        /// </summary>
+        public AzureAppConfigurationKeyVaultOptions ResolveKeyVaultReferencesToNull(Uri vaultUri)
+        {
+            SecretClients.Add(new MockSecretClient(vaultUri));
             return this;
         }
     }

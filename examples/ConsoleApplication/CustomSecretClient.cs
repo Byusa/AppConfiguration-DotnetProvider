@@ -25,10 +25,18 @@ namespace ConsoleApplication
         }
 
         public override Uri VaultUri { get; }
-            
+
+        /// <summary>
+        /// SecretClient for resolving all Key Vault references to null
+        /// </summary>
+        public CustomSecretClient() { }
+
+        /// <summary>
+        /// SecretClient for resolving specific Key Vault references to null
+        /// </summary>
         public CustomSecretClient(Uri vaultUri)
         {
-            VaultUri = vaultUri ?? new Uri("https://test.vault.azure.net");
+            VaultUri = vaultUri;
         }
 
         public override Task<Response<KeyVaultSecret>> GetSecretAsync(string name, string version = null, CancellationToken cancellationToken = default)

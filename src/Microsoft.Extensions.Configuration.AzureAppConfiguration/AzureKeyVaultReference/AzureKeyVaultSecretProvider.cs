@@ -25,7 +25,17 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration.AzureKeyVault
             {
                 foreach (SecretClient client in secretClients)
                 {
-                    string keyVaultId = client.VaultUri.Host;
+                    string keyVaultId;
+
+                    if (client.VaultUri != null)
+                    {
+                        keyVaultId = client.VaultUri.Host;
+                    }
+                    else
+                    {
+                        keyVaultId = KeyVaultReferenceFilter.Any;
+                    }
+
                     _secretClients[keyVaultId] = client;
                 }
             }
@@ -59,6 +69,10 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration.AzureKeyVault
             if (_secretClients.TryGetValue(keyVaultId, out SecretClient client))
             {
                 return client;
+            }
+            else if (_secretClients.Any(s => s.Key.Equals(KeyVaultReferenceFilter.Any)))
+            {
+                return _secretClients[KeyVaultReferenceFilter.Any];
             }
 
             if (_credential == null)
