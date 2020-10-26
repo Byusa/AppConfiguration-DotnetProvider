@@ -68,7 +68,7 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
         internal IEnumerable<KeyValueWatcher> MultiKeyWatchers => _multiKeyWatchers;
 
         /// <summary>
-        /// A collection of <see cref="IKeyValueAdapter"/>.
+        /// A collection of <see cref="KeyValueWatcher"/>.
         /// </summary>
         internal IEnumerable<IKeyValueAdapter> Adapters
         {
