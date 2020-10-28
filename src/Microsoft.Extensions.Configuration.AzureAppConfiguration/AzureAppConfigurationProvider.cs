@@ -29,8 +29,7 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
         private readonly HostType _hostType;
         private readonly ConfigurationClient _client;
         private AzureAppConfigurationOptions _options;
-        private ConcurrentDictionary<string, ConfigurationSetting> _settings;
-        private ConcurrentDictionary<KeyLabelIdentifier, ConfigurationSetting> _refreshRegisteredSettings = new ConcurrentDictionary<KeyLabelIdentifier, ConfigurationSetting>();
+        private ConcurrentDictionary<string, List<ConfigurationSetting>> _settings;
 
         private readonly TimeSpan MinCacheExpirationInterval;
         private readonly SemaphoreSlim InitializationSemaphore = new SemaphoreSlim(1);
@@ -186,12 +185,12 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
 
         private async Task LoadAll(bool ignoreFailures)
         {
-            IDictionary<string, ConfigurationSetting> data = null;
+            IDictionary<string, List<ConfigurationSetting>> data = null;
             string cachedData = null;
 
             try
             {
-                var serverData = new Dictionary<string, ConfigurationSetting>(StringComparer.OrdinalIgnoreCase);
+                var serverData = new Dictionary<string, List<ConfigurationSetting>>(StringComparer.OrdinalIgnoreCase);
 
                 // Use default query if there are no key-values specified for use other than the feature flags
                 bool useDefaultQuery = !_options.KeyValueSelectors.Any(selector => !selector.KeyFilter.StartsWith(FeatureManagementConstants.FeatureFlagMarker));
@@ -209,7 +208,14 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
                     {
                         await foreach (ConfigurationSetting setting in _client.GetConfigurationSettingsAsync(selector, CancellationToken.None).ConfigureAwait(false))
                         {
-                            serverData[setting.Key] = setting;
+                            if (serverData.ContainsKey(setting.Key))
+                            {
+                                serverData[setting.Key].Add(setting);
+                            }
+                            else
+                            {
+                                serverData[setting.Key] = new List<ConfigurationSetting>() { setting };
+                            }
                         }
                     }).ConfigureAwait(false);
                 }
@@ -237,7 +243,14 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
                     {
                         await foreach (ConfigurationSetting setting in _client.GetConfigurationSettingsAsync(selector, CancellationToken.None).ConfigureAwait(false))
                         {
-                            serverData[setting.Key] = setting;
+                            if (serverData.ContainsKey(setting.Key))
+                            {
+                                serverData[setting.Key].Add(setting);
+                            }
+                            else
+                            {
+                                serverData[setting.Key] = new List<ConfigurationSetting>() { setting };
+                            }
                         }
                     }).ConfigureAwait(false);
                 }
@@ -257,7 +270,12 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
                     
                     if (cachedData != null)
                     {
-                        data = JsonSerializer.Deserialize<IDictionary<string, ConfigurationSetting>>(cachedData);
+                        IDictionary<string, ConfigurationSetting> offlineCacheData = JsonSerializer.Deserialize<IDictionary<string, ConfigurationSetting>>(cachedData);
+
+                        foreach (KeyValuePair<string, ConfigurationSetting> setting in offlineCacheData)
+                        {
+                            data[setting.Key] = new List<ConfigurationSetting>() { setting.Value };
+                        }
                     }
                 }
 
@@ -287,7 +305,14 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
 
                 if (_options.OfflineCache != null && cachedData == null)
                 {
-                    _options.OfflineCache.Export(_options, JsonSerializer.Serialize(data));
+                    IDictionary<string, ConfigurationSetting> offlineCacheData = new Dictionary<string, ConfigurationSetting>();
+
+                    foreach (KeyValuePair<string, List<ConfigurationSetting>> setting in data)
+                    {
+                        offlineCacheData[setting.Key] = setting.Value.Last();
+                    }
+
+                    _options.OfflineCache.Export(_options, JsonSerializer.Serialize(offlineCacheData));
                 }
             }
         }
@@ -311,18 +336,25 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
             }
         }
 
-        private async Task LoadKeyValuesRegisteredForRefresh(IDictionary<string, ConfigurationSetting> data)
+        private async Task LoadKeyValuesRegisteredForRefresh(IDictionary<string, List<ConfigurationSetting>> data)
         {
             foreach (KeyValueWatcher changeWatcher in _options.ChangeWatchers)
             {
                 string watchedKey = changeWatcher.Key;
                 string watchedLabel = changeWatcher.Label;
-                KeyLabelIdentifier watchedKeyLabel = new KeyLabelIdentifier(watchedKey, watchedLabel);
 
                 // Skip the loading for the key-value in case it has already been loaded
-                if (data.ContainsKey(watchedKey) && data[watchedKey].Label == watchedLabel.NormalizeNull())
+                if (data.ContainsKey(watchedKey) && data[watchedKey].Any(kv => kv.Label == watchedLabel.NormalizeNull()))
                 {
-                    _refreshRegisteredSettings[watchedKeyLabel] = data[watchedKey];
+                    int index = data[watchedKey].FindIndex(kv => kv.Label == watchedLabel.NormalizeNull());
+
+                    if (index >= 0 && index < data[watchedKey].Count() - 1)
+                    {
+                        // Move this setting to the last position because refresh registered setting should overwrite previously loaded settings
+                        data[watchedKey].Add(data[watchedKey][index]);
+                        data[watchedKey].RemoveAt(index);
+                    }
+
                     continue;
                 }
 
@@ -340,8 +372,14 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
                 // If the key-value was found, store it for updating the settings
                 if (watchedKv != null)
                 {
-                    data[watchedKey] = watchedKv;
-                    _refreshRegisteredSettings[watchedKeyLabel] = watchedKv;
+                    if (data.ContainsKey(watchedKey))
+                    {
+                        data[watchedKey].Add(watchedKv);
+                    }
+                    else
+                    {
+                        data[watchedKey] = new List<ConfigurationSetting>() { watchedKv };
+                    }
                 }
             }
         }
@@ -365,11 +403,10 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
                 {
                     bool hasChanged = false;
                     ConfigurationSetting watchedKv = null;
-                    KeyLabelIdentifier watchedKeyLabel = new KeyLabelIdentifier(watchedKey, watchedLabel);
 
-                    if (_refreshRegisteredSettings.ContainsKey(watchedKeyLabel))
+                    if (_settings.ContainsKey(watchedKey) && _settings[watchedKey].Any(kv => kv.Label == watchedLabel.NormalizeNull()))
                     {
-                        watchedKv = _refreshRegisteredSettings[watchedKeyLabel];
+                        watchedKv = _settings[watchedKey].FirstOrDefault(kv => kv.Label == watchedLabel.NormalizeNull());
 
                         KeyValueChange keyValueChange = default;
                         await TracingUtils.CallWithRequestTracing(_requestTracingEnabled, RequestType.Watch, _hostType,
@@ -386,18 +423,8 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
                                 break;
                             }
 
-                            // If this key-value exists in _settings cache, it needs to be updated.
-                            if (_settings.ContainsKey(watchedKey) && _settings[watchedKey].Label == watchedLabel.NormalizeNull())
-                            {
-                                hasChanged = true;
-                                ProcessChanges(Enumerable.Repeat(keyValueChange, 1));
-                            }
-                            else
-                            {
-                                // This is only a refresh registered setting with 'RefreshAll=false'.
-                                // Change in this key-value will not affect any other key-values in IConfiguration.
-                                _refreshRegisteredSettings[watchedKeyLabel] = keyValueChange.Current;
-                            }
+                            hasChanged = true;
+                            ProcessChanges(Enumerable.Repeat(keyValueChange, 1));
                         }
                     }
                     else
@@ -425,10 +452,16 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
                             }
 
                             hasChanged = true;
-                            _refreshRegisteredSettings[watchedKeyLabel] = watchedKv;
 
-                            // Add the key-value if it is not loaded, or update it if it was loaded with a different label
-                            _settings[watchedKey] = watchedKv;
+                            if (_settings.ContainsKey(watchedKey))
+                            {
+                                // Add to the list of key-values corresponding to watchedKey if it was loaded with a different label previously
+                                _settings[watchedKey].Add(watchedKv);
+                            }
+                            else
+                            {
+                                _settings[watchedKey] = new List<ConfigurationSetting>() { watchedKv };
+                            }
                         }
                     }
 
@@ -462,10 +495,15 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
 
                 try
                 {
-                    IEnumerable<ConfigurationSetting> currentKeyValues = _settings.Values.Where(kv =>
+                    List<ConfigurationSetting> currentKeyValues = new List<ConfigurationSetting>();
+
+                    foreach (KeyValuePair<string, List<ConfigurationSetting>> setting in _settings)
                     {
-                        return kv.Key.StartsWith(changeWatcher.Key) && kv.Label == changeWatcher.Label.NormalizeNull();
-                    });
+                        if (setting.Key.StartsWith(changeWatcher.Key) && setting.Value.Any(kv => kv.Label == changeWatcher.Label.NormalizeNull()))
+                        {
+                            currentKeyValues.Add(setting.Value.FirstOrDefault(kv => kv.Label == changeWatcher.Label.NormalizeNull()));
+                        }
+                    }
 
                     IEnumerable<KeyValueChange> keyValueChanges = await _client.GetKeyValueChangeCollection(currentKeyValues, new GetKeyValueChangeCollectionOptions
                     {
@@ -491,22 +529,23 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
             }
         }
 
-        private async Task SetData(IDictionary<string, ConfigurationSetting> data, bool ignoreFailures = false, CancellationToken cancellationToken = default)
+        private async Task SetData(IDictionary<string, List<ConfigurationSetting>> data, bool ignoreFailures = false, CancellationToken cancellationToken = default)
         {
             // Update cache of settings
-            this._settings = data as ConcurrentDictionary<string, ConfigurationSetting> ??
-                new ConcurrentDictionary<string, ConfigurationSetting>(data, StringComparer.OrdinalIgnoreCase);
+            this._settings = data as ConcurrentDictionary<string, List<ConfigurationSetting>> ??
+                new ConcurrentDictionary<string, List<ConfigurationSetting>>(data, StringComparer.OrdinalIgnoreCase);
 
             // Set the application data for the configuration provider
             var applicationData = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-            foreach (KeyValuePair<string, ConfigurationSetting> kvp in data)
+            foreach (KeyValuePair<string, List<ConfigurationSetting>> kvp in data)
             {
+                ConfigurationSetting settingToBeProcessed = kvp.Value.Last();
                 IEnumerable<KeyValuePair<string, string>> keyValuePairs = null;
 
                 try
                 {
-                    keyValuePairs = await ProcessAdapters(kvp.Value, cancellationToken).ConfigureAwait(false);
+                    keyValuePairs = await ProcessAdapters(settingToBeProcessed, cancellationToken).ConfigureAwait(false);
                 }
                 catch (KeyVaultReferenceException)
                 {
@@ -568,13 +607,42 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
         {
             foreach (KeyValueChange change in changes)
             {
+                string changedKey = change.Key;
+                string changedLabel = change.Label;
+                int index = _settings.ContainsKey(changedKey) ? _settings[changedKey].FindIndex(kv => kv.Label == changedLabel.NormalizeNull()) : -1;
+
                 if (change.ChangeType == KeyValueChangeType.Deleted)
                 {
-                    _settings.TryRemove(change.Key, out ConfigurationSetting removed);
+                    // If multiple labels exist for this key, delete only the one corresponding to current KeyValueChange
+                    if (_settings[changedKey].Any(kv => kv.Label != changedLabel.NormalizeNull()))
+                    {
+                        if (index >= 0)
+                        {
+                            _settings[changedKey].RemoveAt(index);
+                        }
+                    }
+                    else
+                    {
+                        _settings.TryRemove(changedKey, out List<ConfigurationSetting> removed);
+                    }
                 }
                 else if (change.ChangeType == KeyValueChangeType.Modified)
                 {
-                    _settings[change.Key] = change.Current;
+                    if (index >= 0)
+                    {
+                        // Update value of existing ConfigurationSetting
+                        _settings[changedKey][index] = change.Current;
+                    }
+                    else if (_settings.ContainsKey(changedKey))
+                    {
+                        // Add new label for existing key
+                        _settings[changedKey].Add(change.Current);
+                    }
+                    else
+                    {
+                        // Add new ConfigurationSetting
+                        _settings[changedKey] = new List<ConfigurationSetting>() { change.Current };
+                    }
                 }
             }
         }
