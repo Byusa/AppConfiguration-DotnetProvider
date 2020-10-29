@@ -15,12 +15,14 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration.AzureKeyVault
     {
         private readonly IDictionary<string, SecretClient> _secretClients;
         private readonly TokenCredential _credential;
+        private readonly Func<Uri, ValueTask<string>> _secretResolver;
 
-        public AzureKeyVaultSecretProvider(TokenCredential credential = null, IEnumerable<SecretClient> secretClients = null)
+        public AzureKeyVaultSecretProvider(TokenCredential credential = null, IEnumerable<SecretClient> secretClients = null, Func<Uri, ValueTask<string>> secretResolver = null)
         {
             _credential = credential;
             _secretClients = new Dictionary<string, SecretClient>(StringComparer.OrdinalIgnoreCase);
-            
+            _secretResolver = secretResolver;
+
             if (secretClients != null)
             {
                 foreach (SecretClient client in secretClients)
@@ -55,7 +57,14 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration.AzureKeyVault
 
             if (client == null)
             {
-                throw new UnauthorizedAccessException("No key vault credential configured and no matching secret client could be found.");
+                if (_secretResolver == null)
+                {
+                    throw new UnauthorizedAccessException("No key vault credential configured and no matching secret client could be found.");
+                }
+                else
+                {
+                    return await _secretResolver(secretUri);
+                }
             }
 
             KeyVaultSecret secret = await client.GetSecretAsync(secretName, secretVersion, cancellationToken).ConfigureAwait(false);
@@ -70,10 +79,10 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration.AzureKeyVault
             {
                 return client;
             }
-            else if (_secretClients.Any(s => s.Key.Equals(KeyVaultReferenceFilter.Any)))
-            {
-                return _secretClients[KeyVaultReferenceFilter.Any];
-            }
+            //else if (_secretClients.Any(s => s.Key.Equals(KeyVaultReferenceFilter.Any)))
+            //{
+            //    return _secretClients[KeyVaultReferenceFilter.Any];
+            //}
 
             if (_credential == null)
             {

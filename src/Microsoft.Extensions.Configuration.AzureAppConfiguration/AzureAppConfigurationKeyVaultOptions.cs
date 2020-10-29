@@ -5,6 +5,7 @@ using Azure.Core;
 using Azure.Security.KeyVault.Secrets;
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 
 namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
 {
@@ -15,6 +16,7 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
     {
         internal TokenCredential Credential;
         internal List<SecretClient> SecretClients = new List<SecretClient>();
+        internal Func<Uri, ValueTask<string>> SecretResolver;
 
         /// <summary>
         /// Sets the credentials used to authenticate to key vaults that have no registered <see cref="SecretClient"/>.
@@ -37,20 +39,12 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
         }
 
         /// <summary>
-        /// Registers a mock <see cref="SecretClient"/> instance to use to resolve all key vault references to null.
+        /// Sets the callback for those key vault references that have no registered <see cref="SecretClient"/>.
+        /// If you choose to set this callback, you need to explicitly register all SecretClients that your application needs to resolve Key Vault references.
         /// </summary>
-        public AzureAppConfigurationKeyVaultOptions ResolveKeyVaultReferencesToNull()
+        public AzureAppConfigurationKeyVaultOptions SetSecretResolver(Func<Uri, ValueTask<string>> secretResolver)
         {
-            SecretClients.Add(new MockSecretClient());
-            return this;
-        }
-
-        /// <summary>
-        /// Registers a mock <see cref="SecretClient"/> instance to use to resolve specific key vault references to null.
-        /// </summary>
-        public AzureAppConfigurationKeyVaultOptions ResolveKeyVaultReferencesToNull(Uri vaultUri)
-        {
-            SecretClients.Add(new MockSecretClient(vaultUri));
+            SecretResolver = secretResolver;
             return this;
         }
     }
