@@ -208,14 +208,7 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
                     {
                         await foreach (ConfigurationSetting setting in _client.GetConfigurationSettingsAsync(selector, CancellationToken.None).ConfigureAwait(false))
                         {
-                            if (serverData.ContainsKey(setting.Key))
-                            {
-                                serverData[setting.Key].Add(setting);
-                            }
-                            else
-                            {
-                                serverData[setting.Key] = new List<ConfigurationSetting>() { setting };
-                            }
+                            serverData[setting.Key] = new List<ConfigurationSetting>() { setting };
                         }
                     }).ConfigureAwait(false);
                 }
@@ -271,6 +264,7 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
                     if (cachedData != null)
                     {
                         IDictionary<string, ConfigurationSetting> offlineCacheData = JsonSerializer.Deserialize<IDictionary<string, ConfigurationSetting>>(cachedData);
+                        data = new Dictionary<string, List<ConfigurationSetting>>();
 
                         foreach (KeyValuePair<string, ConfigurationSetting> setting in offlineCacheData)
                         {
@@ -305,14 +299,7 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
 
                 if (_options.OfflineCache != null && cachedData == null)
                 {
-                    IDictionary<string, ConfigurationSetting> offlineCacheData = new Dictionary<string, ConfigurationSetting>();
-
-                    foreach (KeyValuePair<string, List<ConfigurationSetting>> setting in data)
-                    {
-                        offlineCacheData[setting.Key] = setting.Value.Last();
-                    }
-
-                    _options.OfflineCache.Export(_options, JsonSerializer.Serialize(offlineCacheData));
+                    _options.OfflineCache.Export(_options, JsonSerializer.Serialize(data.ToDictionary(kv => kv.Key, kv => kv.Value.Last())));
                 }
             }
         }
