@@ -260,7 +260,7 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
                 {
                     // During startup or refreshAll scenario, we'll try to populate config from offline cache, if available
                     cachedData = _options.OfflineCache.Import(_options);
-                    
+
                     if (cachedData != null)
                     {
                         IDictionary<string, ConfigurationSetting> offlineCacheData = JsonSerializer.Deserialize<IDictionary<string, ConfigurationSetting>>(cachedData);
@@ -286,7 +286,7 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
 
                 // Set the cache expiration time for all refresh registered settings
                 var initialLoadTime = DateTimeOffset.UtcNow;
-                
+
                 foreach (KeyValueWatcher changeWatcher in _options.ChangeWatchers)
                 {
                     changeWatcher.CacheExpires = initialLoadTime.Add(changeWatcher.CacheExpirationInterval);
@@ -329,19 +329,15 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
             {
                 string watchedKey = changeWatcher.Key;
                 string watchedLabel = changeWatcher.Label;
+                bool isWatchedKeyLoaded = data.TryGetValue(watchedKey, out List<ConfigurationSetting> loadedKvs);
+                ConfigurationSetting loadedKv = isWatchedKeyLoaded ? loadedKvs.FirstOrDefault(kv => kv.Label == watchedLabel.NormalizeNull()) : null;
 
                 // Skip the loading for the key-value in case it has already been loaded
-                if (data.ContainsKey(watchedKey) && data[watchedKey].Any(kv => kv.Label == watchedLabel.NormalizeNull()))
+                if (loadedKv != null)
                 {
-                    int index = data[watchedKey].FindIndex(kv => kv.Label == watchedLabel.NormalizeNull());
-
-                    if (index >= 0 && index < data[watchedKey].Count() - 1)
-                    {
-                        // Move this setting to the last position because refresh registered setting should overwrite previously loaded settings
-                        data[watchedKey].Add(data[watchedKey][index]);
-                        data[watchedKey].RemoveAt(index);
-                    }
-
+                    // Move this setting to the last position because refresh registered setting should overwrite previously loaded settings
+                    data[watchedKey].Remove(loadedKv);
+                    data[watchedKey].Add(loadedKv);
                     continue;
                 }
 
@@ -359,7 +355,7 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
                 // If the key-value was found, store it for updating the settings
                 if (watchedKv != null)
                 {
-                    if (data.ContainsKey(watchedKey))
+                    if (isWatchedKeyLoaded)
                     {
                         data[watchedKey].Add(watchedKv);
                     }
@@ -389,12 +385,11 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
                 try
                 {
                     bool hasChanged = false;
-                    ConfigurationSetting watchedKv = null;
+                    bool isWatchedKeyCached = _settings.TryGetValue(watchedKey, out List<ConfigurationSetting> cachedKvs);
+                    ConfigurationSetting watchedKv = isWatchedKeyCached ? cachedKvs.FirstOrDefault(kv => kv.Label == watchedLabel.NormalizeNull()) : null;
 
-                    if (_settings.ContainsKey(watchedKey) && _settings[watchedKey].Any(kv => kv.Label == watchedLabel.NormalizeNull()))
+                    if (watchedKv != null)
                     {
-                        watchedKv = _settings[watchedKey].FirstOrDefault(kv => kv.Label == watchedLabel.NormalizeNull());
-
                         KeyValueChange keyValueChange = default;
                         await TracingUtils.CallWithRequestTracing(_requestTracingEnabled, RequestType.Watch, _hostType,
                             async () => keyValueChange = await _client.GetKeyValueChange(watchedKv, CancellationToken.None).ConfigureAwait(false)).ConfigureAwait(false);
@@ -440,7 +435,7 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
 
                             hasChanged = true;
 
-                            if (_settings.ContainsKey(watchedKey))
+                            if (isWatchedKeyCached)
                             {
                                 // Add to the list of key-values corresponding to watchedKey if it was loaded with a different label previously
                                 _settings[watchedKey].Add(watchedKv);
@@ -486,9 +481,14 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
 
                     foreach (KeyValuePair<string, List<ConfigurationSetting>> setting in _settings)
                     {
-                        if (setting.Key.StartsWith(changeWatcher.Key) && setting.Value.Any(kv => kv.Label == changeWatcher.Label.NormalizeNull()))
+                        if (setting.Key.StartsWith(changeWatcher.Key))
                         {
-                            currentKeyValues.Add(setting.Value.FirstOrDefault(kv => kv.Label == changeWatcher.Label.NormalizeNull()));
+                            ConfigurationSetting currentKv = setting.Value.FirstOrDefault(kv => kv.Label == changeWatcher.Label.NormalizeNull());
+
+                            if (currentKv != null)
+                            {
+                                currentKeyValues.Add(currentKv);
+                            }
                         }
                     }
 
