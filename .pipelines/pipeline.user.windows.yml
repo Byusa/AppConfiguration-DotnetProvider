@@ -43,3 +43,22 @@ package:
           to: 'Packages'
           include:
             - '*/bin/PackageOutput/**/*.nupkg'
+
+test:
+  commands:
+    - !!testcommand
+      name: 'Dotnet Test'
+      command: 'test.cmd'
+      fail_on_stderr: false
+      logs:
+        - to: 'Test Logs'
+          include:
+            - '**/*.trx'
+            - '**/*.coverage'
+      testresults:
+        - from: 'tests'
+          title: 'Test Run'
+          type: 'xunit'
+          include:
+            - '**/*.trx'
+            - '**/*.coverage'
